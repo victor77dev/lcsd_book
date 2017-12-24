@@ -4,7 +4,13 @@ lcsd booking
 Recognize first captcha
 
 ### decodeResponse.html
-decode response from https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking.do request
+Decode response from https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking.do request
+
+### download_captcha1.sh
+Download 100 captcha1 images for generating background
+
+### genBackground.py
+Extract background for captcha1 from 100 downloaded images
 
 ### callSeq code
 Upload soon
