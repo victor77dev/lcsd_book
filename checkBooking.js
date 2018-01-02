@@ -1,4 +1,7 @@
+var request = require("request");
+var Cookie = require("request-cookies").Cookie;
 var fs = require("fs");
+localStorage = require("localStorage");
 
 // Find Captcha1
 function readCaptcha1(imgPath) {
@@ -52,6 +55,203 @@ function decodeResponse(responseString) {
     }
   });
 }
+
+// Request index & humanTest
+function lcsdRequest(requestUrl, responseFile, requestCookies="") {
+  const jsdom = require("jsdom");
+  const { JSDOM } = jsdom;
+  var response = {};
+  response.imgPath = "";
+  return new Promise(function(resolve,reject) {
+    request({url: requestUrl, headers: {Cookie: requestCookies}}, function(err, res, body) {
+      fs.writeFile("temp_" + responseFile, body, function (err) {
+        if (err) throw err;
+        console.log("temp_" + responseFile + " Saved");
+      });
+
+      // edit the response to stop auto form submission
+      body = body.replace("document.forms[0].submit();", "document.forms[0];")
+      const window = new JSDOM(body,{
+        localStorage: localStorage,
+        runScripts: "dangerously"
+      }).window;
+      window.localStorage = localStorage;
+
+      // wait for page to load
+      setTimeout(function() {
+        var formData = {};
+        for (element of window.document.forms[0].children)
+          formData[element.name] = element.value;
+
+        requestCookies += window.document.cookie;
+        request.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+          // parse captcha1 url
+          if (body.match(/a=[\d]\.[\d]*/g) != null)
+          {
+            imgPath = body.match(/a=[\d]\.[\d]*/g)[0];
+            response.imgPath = imgPath;
+            console.log("imgPath: " + imgPath);
+          }
+
+          responseCookies = "";
+          rawCookies = res.headers['set-cookie'];
+          for (var i in rawCookies) {
+            var cookie = new Cookie(rawCookies[i]);
+            responseCookies += cookie.key + "=" + cookie.value + "; ";
+          }
+          fs.writeFile(responseFile, body, function (err) {
+            if (err) throw err;
+            console.log(responseFile + " Saved");
+            response.cookies = responseCookies;
+            resolve(response);
+          });
+        });
+      }, 1000);
+    });
+  });
+}
+
+function getCaptcha1(imgPath, outputFile, requestCookies) {
+  return new Promise(function(resolve, reject) {
+    request({url: "http://w2.leisurelink.lcsd.gov.hk/leisurelink/image?" + imgPath, encoding: 'binary', headers: {Cookie: requestCookies}}, function(err, res, img) {
+      fs.writeFile(outputFile, img, 'binary', function (err) {
+        if (err) throw err;
+        console.log(outputFile + " Saved");
+        resolve(outputFile);
+      });
+    });
+  });
+}
+
+// Mutiple retries submission captcha1 (captcha1 image saved in debug folder)
+function retrySubmitCaptcha1(responseFile, imgPath, requestCookies, maxRetry) {
+  captchaInput = "debug/testImg" + maxRetry + ".png";
+  return new Promise(function(resolve, reject) {
+    getCaptcha1(imgPath, captchaInput, requestCookies)
+      .then((captchaInput) => {
+      readCaptcha1(captchaInput).then((data) => {
+        console.log(captchaInput + ":" + data.toString());
+
+        var formData = {};
+        formData["imgCode"] = data.toString().replace("\n","");
+        formData["check"] = true;
+
+        requestUrl = "http://w2.leisurelink.lcsd.gov.hk/leisurelink/application/checkCode.do";
+        request.post({url: requestUrl, form: formData, headers: {Cookie: requestCookies}}, function(err, res, body) {
+          fs.writeFile("temp_" + responseFile, body, function (err) {
+            if (err) throw err;
+            console.log("temp_" + responseFile + " Saved");
+          });
+          if (body.search("forwardForm") == -1)
+          {
+            if (maxRetry > 0) {
+              console.log("Incorrect captcha1");
+              resolve(retrySubmitCaptcha1(responseFile, imgPath, requestCookies, maxRetry - 1));
+            }
+            else {
+              reject("Max retries!! incorrect captcha1");
+            }
+          }
+          else
+          {
+            console.log("Captcha1 success");
+            rawCookies = res.headers['set-cookie'];
+            for (var i in rawCookies) {
+              var cookie = new Cookie(rawCookies[i]);
+              responseCookies += cookie.key + "=" + cookie.value + "; ";
+            }
+            var response = {};
+            response.cookies = responseCookies;
+            response.body = body;
+            resolve(response);
+          }
+        });
+      });
+    });
+  });
+}
+
+// submit captcha1 in checkCode.do
+function submitCaptcha1(responseFile, imgPath, requestCookies) {
+  const jsdom = require("jsdom");
+  const { JSDOM } = jsdom;
+
+  return new Promise(function(resolve, reject) {
+    retrySubmitCaptcha1(responseFile, imgPath, requestCookies, 15)
+    .then((response) => {
+      // edit the response to stop auto form submission
+      body = response.body.replace("document.getElementById(\"forwardForm\").submit();", "document.getElementById(\"forwardForm\");");
+      const window = new JSDOM(body,{
+        localStorage: localStorage,
+        runScripts: "dangerously"
+      }).window;
+      window.localStorage = localStorage;
+
+      var formData = {};
+      for (element of window.document.forms[0].children)
+        formData[element.name] = element.value;
+      requestUrl = window.document.forms[0].action;
+      var winId = window.eval(`winId`);
+
+      requestCookies += window.document.cookie;
+      request.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+        responseCookies = "";
+        responseCookies += "winId=" + winId + "; ";
+        rawCookies = res.headers['set-cookie'];
+        for (var i in rawCookies) {
+          var cookie = new Cookie(rawCookies[i]);
+          responseCookies += cookie.key + "=" + cookie.value + "; ";
+        }
+
+        fs.writeFile(responseFile, body, function (err) {
+          if (err) throw err;
+          console.log(responseFile + " Saved");
+          var response = {};
+          response.cookies = responseCookies;
+          resolve(response);
+        });
+      });
+    });
+  });
+}
+
+function getPage(requestUrl, responseFile, requestCookies) {
+  request({url: requestUrl, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+    fs.writeFile(responseFile, body, function (err) {
+      if (err) throw err;
+      console.log(responseFile + " Saved");
+    });
+  });
+}
+
+function getCourtInfo(responseFile, requestCookies) {
+  var requestUrl = "https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking.do";
+  formData = "5|0|20|https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/gwt-files/facilityBooking/|1557DA56CD3A6F4FF3AC2AB7A45BA80A|hk.gov.lcsd.leisurelink.client.service.SearchFacilityService|searchFacility|hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.SearchFacilityRequest|Z|hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.SearchFacilityRequest/2775037695|KWT|20180106|7|22|[Ljava.lang.String;/2600011424|148|125006200|150|1514905045159|AM|23|35|36|1|2|3|4|2|5|6|7|8|9|10|11|1|12|3|13|14|15|16|17|12|3|18|19|20|0|";
+  request.post({url: requestUrl, body: formData, headers: {"Cookie": requestCookies,
+    "Content-Type": "text/x-gwt-rpc; charset=UTF-8",
+  }}, function(err, res, body) {
+    console.log(body);
+    fs.writeFile(responseFile, body, function (err) {
+      if (err) throw err;
+      console.log(responseFile + " Saved");
+    });
+  });
+}
+
+lcsdRequest("http://w2.leisurelink.lcsd.gov.hk/index/index.jsp?lang=tc", "testing1.html").then((response1) => {
+  lcsdRequest("http://w2.leisurelink.lcsd.gov.hk/leisurelink/humanTest/humanTest.jsp?lang=TC", "testing2.html", response1.cookies).then((response2) => {
+    submitCaptcha1("testing3.html", response2.imgPath,response1.cookies + response2.cookies)
+      .then((response3) => {
+        // looks like it is important to make these 3 calls before checking court
+        getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking/login/login.jsp", "testing4.html", response3.cookies);
+        getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityEnquiry/enquiryLogin.do", "testing5.html", response3.cookies);
+        getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/gwt-files/facilityBooking/A95899F762939F6679A16ADB13835234.cache.html", "testing6.html", response3.cookies);
+        setTimeout(function() {
+          getCourtInfo("testing7.html", response3.cookies);
+        }, 5000);
+      });
+  });
+});
 
 // Example for decode response
 // Sample response from facilityBooking.do
