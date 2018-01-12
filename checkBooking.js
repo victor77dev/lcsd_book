@@ -1,7 +1,9 @@
 var request = require("request");
 var Cookie = require("request-cookies").Cookie;
 var fs = require("fs");
-localStorage = require("localStorage");
+
+const getCookiesRetryTime = 5000; // 5s
+const randomRequestTime = 10000; // 10s
 
 // Find Captcha1
 function readCaptcha1(imgPath) {
@@ -15,6 +17,8 @@ function readCaptcha1(imgPath) {
     });
     process.stderr.on("data", (data) => {
       console.log("Error: " + data.toString());
+      // output "error"
+      resolve("error");
     });
     process.on("close", (code) => {
       console.log("Read captcha end");
@@ -23,36 +27,41 @@ function readCaptcha1(imgPath) {
 }
 
 // Decode response from facilityBooking.do
-function decodeResponse(responseString) {
+function decodeResponse(responseString, allData) {
   const jsdom = require("jsdom");
   const { JSDOM } = jsdom;
 
-  decodeResponsePath = "decodeResponse.html";
-  fs.readFile(decodeResponsePath, (err, data) => {
-    if (err) {
-      return console.log("readFile Error: " + err);
-    }
-    const window = new JSDOM(data,{
-      runScripts: "dangerously"
-    }).window;
-
-    result = window.eval(`v8('` +responseString + `', "")`);
-    date = result.b;
-    for (i = 0; i < result.g.a.length; i++)
-    {
-      console.log("date: "+ result.b);
-      console.log("location: "+ result.g.a[i].a);
-      for (courtNo = 0; courtNo < result.g.a[i].f.a.length; courtNo++)
-      {
-        console.log("court " + courtNo + ": ");
-        court = result.g.a[i].f.a[courtNo];
-        for (sessionNo = 0; sessionNo < court.c.a.length; sessionNo++)
-        {
-          courtStat = court.c.a[sessionNo];
-          console.log("time: " + courtStat.b + " to " + courtStat.d + ": " + courtStat.a);
-        }
+  return new Promise(function(resolve, reject) {
+    decodeResponsePath = "decodeResponse.html";
+    fs.readFile(decodeResponsePath, (err, data) => {
+      if (err) {
+        return console.log("readFile Error: " + err);
       }
-    }
+      var window = new JSDOM(data,{
+        runScripts: "dangerously"
+      }).window;
+
+      result = window.eval(`v8('` +responseString + `', "")`);
+
+      // date = result.b;
+      for (i = 0; i < result.g.a.length; i++) {
+        var location = result.g.a[i].a;
+        var courtData = allData[location] || {};
+        courtData.location = location;
+        courtData.courts = courtData.courts || {};
+        for (courtNo = 0; courtNo < result.g.a[i].f.a.length; courtNo++) {
+          court = result.g.a[i].f.a[courtNo];
+          courtData.courts[courtNo] = courtData.courts[courtNo] || {};
+          for (sessionNo = 0; sessionNo < court.c.a.length; sessionNo++) {
+            courtStat = court.c.a[sessionNo];
+            // start_time = courtStat.b; end_time = courtStat.d; court_status = courtStat.a);
+            courtData.courts[courtNo][courtStat.b + "-" + courtStat.d] = courtStat.a;
+          }
+        }
+        allData[location] = courtData;
+      }
+      resolve(allData);
+    });
   });
 }
 
@@ -71,41 +80,45 @@ function lcsdRequest(requestUrl, responseFile, requestCookies="") {
 
       // edit the response to stop auto form submission
       body = body.replace("document.forms[0].submit();", "document.forms[0];")
-      const window = new JSDOM(body,{
+      var window = new JSDOM(body,{
         localStorage: localStorage,
         runScripts: "dangerously"
       }).window;
+      var localStorage = require("localStorage");
       window.localStorage = localStorage;
 
       // wait for page to load
-      setTimeout(function() {
+      var loading = setInterval(function() {
         var formData = {};
         for (element of window.document.forms[0].children)
           formData[element.name] = element.value;
+        if (formData != {})
+        {
+          clearInterval(loading);
+          requestCookies += window.document.cookie;
+          request.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+            // parse captcha1 url
+            if (body.match(/a=[\d]\.[\d]*/g) != null)
+            {
+              imgPath = body.match(/a=[\d]\.[\d]*/g)[0];
+              response.imgPath = imgPath;
+              console.log("imgPath: " + imgPath);
+            }
 
-        requestCookies += window.document.cookie;
-        request.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
-          // parse captcha1 url
-          if (body.match(/a=[\d]\.[\d]*/g) != null)
-          {
-            imgPath = body.match(/a=[\d]\.[\d]*/g)[0];
-            response.imgPath = imgPath;
-            console.log("imgPath: " + imgPath);
-          }
-
-          responseCookies = "";
-          rawCookies = res.headers['set-cookie'];
-          for (var i in rawCookies) {
-            var cookie = new Cookie(rawCookies[i]);
-            responseCookies += cookie.key + "=" + cookie.value + "; ";
-          }
-          fs.writeFile(responseFile, body, function (err) {
-            if (err) throw err;
-            console.log(responseFile + " Saved");
-            response.cookies = responseCookies;
-            resolve(response);
+            responseCookies = "";
+            rawCookies = res.headers['set-cookie'];
+            for (var i in rawCookies) {
+              var cookie = new Cookie(rawCookies[i]);
+              responseCookies += cookie.key + "=" + cookie.value + "; ";
+            }
+            fs.writeFile(responseFile, body, function (err) {
+              if (err) throw err;
+              console.log(responseFile + " Saved");
+              response.cookies = responseCookies;
+              resolve(response);
+            });
           });
-        });
+        }
       }, 1000);
     });
   });
@@ -181,10 +194,11 @@ function submitCaptcha1(responseFile, imgPath, requestCookies) {
     .then((response) => {
       // edit the response to stop auto form submission
       body = response.body.replace("document.getElementById(\"forwardForm\").submit();", "document.getElementById(\"forwardForm\");");
-      const window = new JSDOM(body,{
+      var window = new JSDOM(body,{
         localStorage: localStorage,
         runScripts: "dangerously"
       }).window;
+      var localStorage = require("localStorage");
       window.localStorage = localStorage;
 
       var formData = {};
@@ -208,57 +222,265 @@ function submitCaptcha1(responseFile, imgPath, requestCookies) {
           console.log(responseFile + " Saved");
           var response = {};
           response.cookies = responseCookies;
+          console.log("Cookies: " + response.cookies);
           resolve(response);
+        });
+      });
+    })
+    .catch((err)=>{
+      reject(err);
+    });
+  });
+}
+
+// group the get and submit captcha1 to get the correct cookies for 10min checking token
+function getCookies(maxRetry) {
+  return new Promise(function(resolve, reject) {
+    lcsdRequest("http://w2.leisurelink.lcsd.gov.hk/index/index.jsp?lang=tc", "testing1.html").then((response1) => {
+      lcsdRequest("http://w2.leisurelink.lcsd.gov.hk/leisurelink/humanTest/humanTest.jsp?lang=TC", "testing2.html", response1.cookies).then((response2) => {
+        submitCaptcha1("testing3.html", response2.imgPath,response1.cookies + response2.cookies)
+        .then((response3) => {
+          resolve(response3);
+        })
+        .catch((err)=> {
+          console.log(err + "\nRetry to get cookies");
+          if (maxRetry > 0)
+          {
+            setTimeout(function() {
+              resolve(getCookies(maxRetry - 1));
+            }, getCookiesRetryTime);
+          }
+          else
+            reject("getCookies reaches Max retry");
         });
       });
     });
   });
 }
 
+// download the pages after getting token
 function getPage(requestUrl, responseFile, requestCookies) {
-  request({url: requestUrl, headers: {"Cookie": requestCookies}}, function(err, res, body) {
-    fs.writeFile(responseFile, body, function (err) {
-      if (err) throw err;
-      console.log(responseFile + " Saved");
-    });
-  });
-}
-
-function getCourtInfo(responseFile, requestCookies) {
-  var requestUrl = "https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking.do";
-  formData = "5|0|20|https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/gwt-files/facilityBooking/|1557DA56CD3A6F4FF3AC2AB7A45BA80A|hk.gov.lcsd.leisurelink.client.service.SearchFacilityService|searchFacility|hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.SearchFacilityRequest|Z|hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.SearchFacilityRequest/2775037695|KWT|20180106|7|22|[Ljava.lang.String;/2600011424|148|125006200|150|1514905045159|AM|23|35|36|1|2|3|4|2|5|6|7|8|9|10|11|1|12|3|13|14|15|16|17|12|3|18|19|20|0|";
-  request.post({url: requestUrl, body: formData, headers: {"Cookie": requestCookies,
-    "Content-Type": "text/x-gwt-rpc; charset=UTF-8",
-  }}, function(err, res, body) {
-    console.log(body);
-    fs.writeFile(responseFile, body, function (err) {
-      if (err) throw err;
-      console.log(responseFile + " Saved");
-    });
-  });
-}
-
-lcsdRequest("http://w2.leisurelink.lcsd.gov.hk/index/index.jsp?lang=tc", "testing1.html").then((response1) => {
-  lcsdRequest("http://w2.leisurelink.lcsd.gov.hk/leisurelink/humanTest/humanTest.jsp?lang=TC", "testing2.html", response1.cookies).then((response2) => {
-    submitCaptcha1("testing3.html", response2.imgPath,response1.cookies + response2.cookies)
-      .then((response3) => {
-        // looks like it is important to make these 3 calls before checking court
-        getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking/login/login.jsp", "testing4.html", response3.cookies);
-        getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityEnquiry/enquiryLogin.do", "testing5.html", response3.cookies);
-        getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/gwt-files/facilityBooking/A95899F762939F6679A16ADB13835234.cache.html", "testing6.html", response3.cookies);
-        setTimeout(function() {
-          getCourtInfo("testing7.html", response3.cookies);
-        }, 5000);
+  return new Promise(function(resolve, reject) {
+    request({url: requestUrl, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+      fs.writeFile(responseFile, body, function (err) {
+        if (err) throw err;
+        console.log(responseFile + " Saved");
+        resolve();
       });
+    });
+  });
+}
+
+// send calls before really sending check court info
+function getBasicPages(response) {
+  return new Promise(function(resolve, reject) {
+    // looks like it is important to make these 3 calls before checking court
+    getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking/login/login.jsp", "testing4.html", response.cookies)
+    .then(() => {
+      getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityEnquiry/enquiryLogin.do", "testing5.html", response.cookies)
+    .then(() => {
+      getPage("https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/gwt-files/facilityBooking/A95899F762939F6679A16ADB13835234.cache.html", "testing6.html", response.cookies)
+    .then(() => {
+      resolve(response);
+    });
+    });
+    });
+  });
+}
+
+// send check court request
+function getCourtInfo(responseFile, formData, date, requestCookies, maxRetry) {
+  var requestUrl = "https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking.do";
+  return new Promise(function(resolve, reject) {
+    console.log("send " + responseFile);
+    request.post({url: requestUrl, body: formData, headers: {"Cookie": requestCookies,
+      "Content-Type": "text/x-gwt-rpc; charset=UTF-8",
+    }}, function(err, res, body) {
+      fs.writeFile("debug/" + responseFile + "_" + date, body, function (err) {
+        if (err) throw err;
+        if (body.search("//OK") == -1) {
+          if (maxRetry > 0) {
+              resolve(getCourtInfo(responseFile, formData, date, requestCookies, maxRetry - 1));
+          }
+          else
+            reject(responseFile + "_" + date + ": Max retry");
+        }
+        else {
+          console.log("debug/" + responseFile + "_" + date + " Saved");
+          resolve(body);
+        }
+      });
+    });
+  });
+}
+
+// create summary for all resposnes
+function summarizeCourtData(outputFile, allData) {
+  var summary = {};
+  var timeList = [];
+  var courtList = {};
+  return new Promise(function(resolve, reject) {
+    for (var key in allData) {
+      var currentTimeList = Object.keys(allData[key]["courts"][0]);
+      for (var time in currentTimeList) {
+        if (timeList.indexOf(currentTimeList[time]) == -1)
+          timeList.push(currentTimeList[time]);
+      }
+    }
+    timeList = timeList.sort();
+    summary.time = timeList;
+    for (var key in allData) {
+      var courtCount = [];
+      for (var index in timeList) {
+        var time = timeList[index];
+        var count = 0;
+        for (var courtNo in allData[key]["courts"]) {
+          var court = allData[key]["courts"][courtNo];
+          if(court[time] == "Y")
+            count++;
+        }
+        courtCount.push(count);
+      }
+      summary[key] = courtCount;
+    }
+    fs.writeFile(outputFile, JSON.stringify(summary), function(err) {
+      if (err) throw err;
+      console.log(outputFile + " Saved");
+      resolve(summary);
+    });
+  });
+}
+
+// sends all checking requests
+function checkBooking(response) {
+  console.log("check courts");
+  return new Promise(function(checkResolve, checkReject) {
+    var summarizeAll = [];
+    var allSummary = {};
+
+    fs.readFile("requestCourtList.json", (err, data) => {
+      if (err) {
+        return console.log("Read requestCourtList Error: " + err);
+      }
+      for (var i = 0; i < 10; i++) {
+        (function() {
+          var d = new Date();
+          d.setDate(d.getDate() + i);
+          var date = "";
+          date += d.getFullYear();
+          date += d.getMonth() + 1 < 10 ? "0" + (d.getMonth() + 1): d.getDate + 1;
+          date += d.getDate() < 10 ? "0" + d.getDate(): d.getDate();
+          var readFilePromise = new Promise(function(fileResolve, fileReject) {
+            fs.readFile("debug/rawCourtData" + date, (err, allData)=> {
+              if (err)
+                allData = "{}";
+              if (allData.toString() == "")
+                allData = "{}";
+              allData = JSON.parse(allData);
+
+              var requestList = JSON.parse(data);
+              var decodeAll = [];
+              for (var key in requestList) {
+                for (var time in ["AM", "PM", "EV"])
+                {
+                  console.log("time: "+time)
+                  var formData = requestList[key].replace("date", date).replace("AM", time);
+                  var getResponse = new Promise(function(resolve, reject) {
+                    setTimeout(() => {
+                  console.log("time: "+time)
+                      getCourtInfo(key + "_" + time, formData, date,  response.cookies, 3).then((responseString)=> {
+                        decodeResponse(responseString, allData, date).then(()=>{
+                          resolve("decoded");
+                        });
+                      })
+                      .catch((err) => {
+                        reject(err);
+                      });
+                    }, Math.random() * randomRequestTime % randomRequestTime);
+                  });
+                  decodeAll.push(getResponse);
+                }
+              }
+              Promise.all(decodeAll).then(() => {
+                fs.writeFile("debug/rawCourtData" + date, JSON.stringify(allData), function (err) {
+                  if (err) throw err;
+                  console.log("debug/rawCourtData" + date + " Saved");
+                });
+                var summaryResponse = new Promise(function(resolve, reject) {
+                  summarizeCourtData("debug/courtData" + date, allData)
+                  .then((summary) => {
+                    allSummary[date] = summary;
+                    resolve("summarized");
+                    fileResolve("read file");
+                  });
+                });
+              });
+            });
+          });
+          summarizeAll.push(readFilePromise);
+        })();
+      }
+      Promise.all(summarizeAll).then(() => {
+        checkResolve(allSummary);
+      });
+    });
+  });
+}
+
+// initialize of checking and try if the cookies is working
+function initChecking(maxRetry) {
+  return new Promise(function(resolve, reject) {
+    getCookies(3).then((response) => {
+      getBasicPages(response)
+      .then((response) => {
+        fs.readFile("requestCourtList.json", (err, data) => {
+          if (err) {
+            return console.log("Read requestCourtList Error: " + err);
+          }
+
+          var d = new Date();
+          var date = "";
+          date += d.getFullYear();
+          date += d.getMonth() + 1 < 10 ? "0" + (d.getMonth() + 1): d.getDate + 1;
+          date += d.getDate() < 10 ? "0" + d.getDate(): d.getDate();
+
+          var requestList = JSON.parse(data);
+          var key = Object.keys(requestList)[0];
+          var formData = requestList[key].replace("date", date);
+          getCourtInfo(key, formData, date,  response.cookies, 3)
+          .then((data) => {
+            resolve(response);
+          })
+          .catch((err) => {
+            if (maxRetry > 0) {
+              console.log("initChecking Retry: getCourtInfo Error:" + err);
+              setTimeout(function() {
+                resolve(initChecking(maxRetry - 1));
+              }, getCookiesRetryTime);
+            }
+            else
+              reject(err);
+          })
+        });
+      });
+    })
+    .catch((err) => {
+      if (maxRetry > 0) {
+        console.log("initChecking Retry: getCookies Error:" + err);
+        setTimeout(function() {
+          resolve(initChecking(maxRetry - 1));
+        }, getCookiesRetryTime);
+      }
+      else
+        reject(err);
+    });
+  });
+}
+
+initChecking(5).then((response) => {
+  checkBooking(response).then((summary) => {
+    var date = new Date();
+    summary["latest_update"] = date;
+    console.log(summary);
   });
 });
-
-// Example for decode response
-// Sample response from facilityBooking.do
-responseString = '//OK[0,18,1,17,23,10,17,1,16,23,10,16,1,14,23,10,14,1,13,15,10,13,1,12,15,10,5,6,53,28,20,18,1,17,23,10,17,1,16,23,10,16,1,14,23,10,14,1,13,15,10,13,1,12,48,10,5,6,52,26,20,18,1,17,23,10,17,1,16,23,10,16,1,14,23,10,14,1,13,15,10,13,1,12,48,10,5,6,51,24,20,18,1,17,23,10,17,1,16,23,10,16,1,14,23,10,14,1,13,15,10,13,1,12,15,10,5,6,50,21,20,4,6,49,18,1,17,11,10,17,1,16,11,10,16,1,14,11,10,14,1,13,15,10,13,1,12,48,10,5,6,0,47,46,7,18,1,17,23,10,17,1,16,23,10,16,1,14,42,10,14,1,13,42,10,13,1,12,23,10,5,6,45,28,20,18,1,17,23,10,17,1,16,23,10,16,1,14,42,10,14,1,13,42,10,13,1,12,23,10,5,6,44,26,20,18,1,17,23,10,17,1,16,23,10,16,1,14,42,10,14,1,13,42,10,13,1,12,23,10,5,6,43,24,20,18,1,17,23,10,17,1,16,23,10,16,1,14,42,10,14,1,13,42,10,13,1,12,23,10,5,6,41,21,20,4,6,40,18,1,17,11,10,17,1,16,11,10,16,1,14,11,10,14,1,13,11,10,13,1,12,11,10,5,6,0,39,38,7,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,23,10,13,1,12,23,10,5,6,37,36,20,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,23,10,13,1,12,23,10,5,6,35,34,20,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,23,10,13,1,12,23,10,5,6,33,32,20,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,23,10,13,1,12,23,10,5,6,31,30,20,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,15,10,13,1,12,15,10,5,6,29,28,20,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,15,10,13,1,12,15,10,5,6,27,26,20,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,15,10,13,1,12,15,10,5,6,25,24,20,18,1,17,23,10,17,1,16,23,10,16,1,14,15,10,14,1,13,15,10,13,1,12,15,10,5,6,22,21,20,8,6,19,18,1,17,11,10,17,1,16,11,10,16,1,14,15,10,14,1,13,11,10,13,1,12,11,10,5,6,0,9,8,7,3,6,0,5,4,3,0,2,0,1,["hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.SearchFacilityResult/3642383371","20171213","1512872376384","注意：<br/>-你在繁忙時間最多可選擇2個時段，非繁忙時間則最多可選擇4個時段。<br/>-按「查看設施/場地的租訂情況」檢視每個場地各編號球場可供租訂的時段。<br/>-按「隱藏設施/場地的租訂情況」隱藏整個場地可供租訂的時段。(系統會自動編配球場編號)<br/>","[Lhk.gov.lcsd.leisurelink.client.data.item.facilityBooking.VenueNotice;/1648660365","java.util.ArrayList/3821976829","hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.VirtualRoom/1661510947","林士德體育館 - 主場","148","hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.TimeSlotStatus/449591921","&NBSP;","1800","1900","2000","N","2100","2200","2300","23","hk.gov.lcsd.leisurelink.client.data.item.facilityBooking.VirtualCourt/1187450941","設施/ 球場編號 1","268","C","設施/ 球場編號 2","269","設施/ 球場編號 3","270","設施/ 球場編號 4","271","設施/ 球場編號 5","272","設施/ 球場編號 6","273","設施/ 球場編號 7","274","設施/ 球場編號 8","275","北葵涌鄧肇堅體育館 - 主場","125006200","35","120023503","O","120023504","120023505","120023506","長發體育館 - 主場","150","Y","36","280","281","282","283"],0,5]';
-decodeResponse(responseString);
-
-// Example for check Captcha1
-readCaptcha1("captcha1_data/0.png").then((res) => {
-    console.log(res);
-  });
