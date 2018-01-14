@@ -2,6 +2,12 @@ var request = require("request");
 var Cookie = require("request-cookies").Cookie;
 var fs = require("fs");
 
+var limitPool = {maxSockets: 10}
+var limitRequest = request.defaults({
+  pool: limitPool,
+  timeout: 10000,
+})
+
 const getCookiesRetryTime = 5000; // 5s
 const randomRequestTime = 10000; // 10s
 
@@ -73,6 +79,7 @@ function lcsdRequest(requestUrl, responseFile, requestCookies="") {
   response.imgPath = "";
   return new Promise(function(resolve,reject) {
     request({url: requestUrl, headers: {Cookie: requestCookies}}, function(err, res, body) {
+      if (err) throw err;
       fs.writeFile("temp_" + responseFile, body, function (err) {
         if (err) throw err;
         console.log("temp_" + responseFile + " Saved");
@@ -96,6 +103,8 @@ function lcsdRequest(requestUrl, responseFile, requestCookies="") {
         {
           clearInterval(loading);
           requestCookies += window.document.cookie;
+          limitRequest.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+            if (err) throw err;
           request.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
             // parse captcha1 url
             if (body.match(/a=[\d]\.[\d]*/g) != null)
@@ -127,6 +136,7 @@ function lcsdRequest(requestUrl, responseFile, requestCookies="") {
 function getCaptcha1(imgPath, outputFile, requestCookies) {
   return new Promise(function(resolve, reject) {
     request({url: "http://w2.leisurelink.lcsd.gov.hk/leisurelink/image?" + imgPath, encoding: 'binary', headers: {Cookie: requestCookies}}, function(err, res, img) {
+      if (err) throw err;
       fs.writeFile(outputFile, img, 'binary', function (err) {
         if (err) throw err;
         console.log(outputFile + " Saved");
@@ -150,7 +160,8 @@ function retrySubmitCaptcha1(responseFile, imgPath, requestCookies, maxRetry) {
         formData["check"] = true;
 
         requestUrl = "http://w2.leisurelink.lcsd.gov.hk/leisurelink/application/checkCode.do";
-        request.post({url: requestUrl, form: formData, headers: {Cookie: requestCookies}}, function(err, res, body) {
+        limitRequest.post({url: requestUrl, form: formData, headers: {Cookie: requestCookies}}, function(err, res, body) {
+          if (err) throw err;
           fs.writeFile("temp_" + responseFile, body, function (err) {
             if (err) throw err;
             console.log("temp_" + responseFile + " Saved");
@@ -208,7 +219,8 @@ function submitCaptcha1(responseFile, imgPath, requestCookies) {
       var winId = window.eval(`winId`);
 
       requestCookies += window.document.cookie;
-      request.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+      limitRequest.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+        if (err) throw err;
         responseCookies = "";
         responseCookies += "winId=" + winId + "; ";
         rawCookies = res.headers['set-cookie'];
@@ -262,6 +274,7 @@ function getCookies(maxRetry) {
 function getPage(requestUrl, responseFile, requestCookies) {
   return new Promise(function(resolve, reject) {
     request({url: requestUrl, headers: {"Cookie": requestCookies}}, function(err, res, body) {
+      if (err) throw err;
       fs.writeFile(responseFile, body, function (err) {
         if (err) throw err;
         console.log(responseFile + " Saved");
@@ -293,9 +306,10 @@ function getCourtInfo(responseFile, formData, date, requestCookies, maxRetry) {
   var requestUrl = "https://t2.leisurelink.lcsd.gov.hk/lcsd/leisurelink/facilityBooking.do";
   return new Promise(function(resolve, reject) {
     console.log("send " + responseFile);
-    request.post({url: requestUrl, body: formData, headers: {"Cookie": requestCookies,
+    limitRequest.post({url: requestUrl, body: formData, headers: {"Cookie": requestCookies,
       "Content-Type": "text/x-gwt-rpc; charset=UTF-8",
     }}, function(err, res, body) {
+      if (err) throw err;
       fs.writeFile("debug/" + responseFile + "_" + date, body, function (err) {
         if (err) throw err;
         if (body.search("//OK") == -1) {
