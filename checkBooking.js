@@ -380,25 +380,28 @@ function checkBooking(response) {
 
               var requestList = JSON.parse(data);
               var decodeAll = [];
-              for (var key in requestList) {
-                for (var time in ["AM", "PM", "EV"])
-                {
-                  console.log("time: "+time)
-                  var formData = requestList[key].replace("date", date).replace("AM", time);
-                  var getResponse = new Promise(function(resolve, reject) {
-                    setTimeout(() => {
-                  console.log("time: "+time)
-                      getCourtInfo(key + "_" + time, formData, date,  response.cookies, 3).then((responseString)=> {
-                        decodeResponse(responseString, allData, date).then(()=>{
-                          resolve("decoded");
-                        });
-                      })
-                      .catch((err) => {
-                        reject(err);
+              function getResponseAndDecode(date, time, key, request, decodeAll) {
+                var formData = request.replace("date", date).replace("AM", time);
+                var getResponse = new Promise(function(resolve, reject) {
+                  setTimeout(() => {
+                    getCourtInfo(key + "_" + time, formData, date,  response.cookies, 5).then((responseString)=> {
+                      console.log(key + "_" + time + ": decoding");
+                      decodeResponse(responseString, allData, date).then(()=>{
+                        resolve("decoded");
                       });
-                    }, Math.random() * randomRequestTime % randomRequestTime);
-                  });
-                  decodeAll.push(getResponse);
+                    })
+                    .catch((err) => {
+                      reject(err);
+                    });
+                  }, Math.random() * randomRequestTime % randomRequestTime);
+                });
+                return decodeAll.push(getResponse);
+              }
+              for (var key in requestList) {
+                var timeRequestList = ["AM", "PM", "EV"];
+                for (var time in timeRequestList) {
+                  console.log("key: " + key + " time: " + time);
+                  getResponseAndDecode(date, timeRequestList[time], key, requestList[key], decodeAll);
                 }
               }
               Promise.all(decodeAll).then(() => {
