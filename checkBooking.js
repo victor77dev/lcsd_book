@@ -47,7 +47,8 @@ function decodeResponse(responseString, allData) {
         runScripts: "dangerously"
       }).window;
 
-      result = window.eval(`v8('` +responseString + `', "")`);
+      responseString = JSON.stringify(responseString);
+      result = window.eval(`v8(` + responseString + `, "")`);
 
       // date = result.b;
       for (i = 0; i < result.g.a.length; i++) {
