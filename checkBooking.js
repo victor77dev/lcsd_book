@@ -31,9 +31,10 @@ function readCaptcha1(imgPath) {
     });
   });
 }
+exports.readCaptcha1 = readCaptcha1;
 
 // Decode response from facilityBooking.do
-function decodeResponse(responseString, allData) {
+function decodeResponse(responseString, allData={}) {
   const jsdom = require("jsdom");
   const { JSDOM } = jsdom;
 
@@ -71,9 +72,11 @@ function decodeResponse(responseString, allData) {
     });
   });
 }
+exports.decodeResponse = decodeResponse;
 
 // Request index & humanTest
 function lcsdRequest(requestUrl, responseFile, requestCookies="") {
+  console.log("lcsdRequest requestCookies:" + requestCookies);
   const jsdom = require("jsdom");
   const { JSDOM } = jsdom;
   var response = {};
@@ -102,17 +105,21 @@ function lcsdRequest(requestUrl, responseFile, requestCookies="") {
           formData[element.name] = element.value;
         if (formData != {})
         {
+          console.log(responseFile + " created form:" + formData);
           clearInterval(loading);
           requestCookies += window.document.cookie;
           limitRequest.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
             if (err) throw err;
-          request.post({url: requestUrl, form: formData, headers: {"Cookie": requestCookies}}, function(err, res, body) {
             // parse captcha1 url
             if (body.match(/a=[\d]\.[\d]*/g) != null)
             {
               imgPath = body.match(/a=[\d]\.[\d]*/g)[0];
               response.imgPath = imgPath;
               console.log("imgPath: " + imgPath);
+            }
+            else {
+              if (responseFile == "testing2.html")
+                console.log("cannot find imgPath. body:" + body);
             }
 
             responseCookies = "";
@@ -129,6 +136,8 @@ function lcsdRequest(requestUrl, responseFile, requestCookies="") {
             });
           });
         }
+        else
+          console.log(responseFile + " form is empty");
       }, 1000);
     });
   });
@@ -495,10 +504,13 @@ function initChecking(maxRetry) {
   });
 }
 
-initChecking(5).then((response) => {
-  checkBooking(response).then((summary) => {
-    var date = new Date();
-    summary["latest_update"] = date;
-    console.log(summary);
+function updateCourtInfo() {
+  initChecking(5).then((response) => {
+    checkBooking(response).then((summary) => {
+      var date = new Date();
+      summary["latest_update"] = date;
+      console.log(summary);
+    });
   });
-});
+}
+exports.updateCourtInfo = updateCourtInfo;
