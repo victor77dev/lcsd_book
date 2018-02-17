@@ -454,6 +454,62 @@ function checkBooking(response) {
   });
 }
 
+function readAllLastSummary() {
+  var summarizeAll = [];
+  var allSummary = {};
+  for (var i = 0; i < 10; i++) {
+    (function() {
+      var d = new Date();
+      d.setDate(d.getDate() + i);
+      var date = "";
+      date += d.getFullYear();
+      date += d.getMonth() + 1 < 10 ? "0" + (d.getMonth() + 1): d.getDate + 1;
+      date += d.getDate() < 10 ? "0" + d.getDate(): d.getDate();
+      var summaryRead = new Promise(function(resolve, reject) {
+        fs.readFile("debug/courtData" + date, (err, data)=> {
+          if (err) {
+            console.log("Fail to read debug/courtData" + date);
+            resolve(date);
+          }
+          else {
+            var summary = JSON.parse(data);
+            allSummary[date] = summary;
+            resolve(date);
+          }
+        });
+      });
+      summarizeAll.push(summaryRead);
+    })();
+  }
+  return new Promise(function(readResolve, readReject) {
+    Promise.all(summarizeAll).then(() => {
+      readResolve(allSummary);
+    })
+    .catch(() => {
+      console.log("fail allSummary");
+      readResolve(allSummary);
+    });
+  });
+}
+exports.readAllLastSummary = readAllLastSummary;
+
+function readLastSummary(date) {
+  return new Promise(function(resolve, reject) {
+    fs.readFile("debug/courtData" + date, (err, data)=> {
+      if (err) {
+        console.log("Fail to read debug/courtData" + date);
+        reject("Fail to read debug/courtData" + date);
+      }
+      else {
+        var summary = {};
+        summary[date] = JSON.parse(data);
+        resolve(summary);
+      }
+    });
+  });
+}
+exports.readLastSummary = readLastSummary;
+
 // initialize of checking and try if the cookies is working
 function initChecking(maxRetry) {
   return new Promise(function(resolve, reject) {

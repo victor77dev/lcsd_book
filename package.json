@@ -4,7 +4,8 @@
   "description": "lcsd booking",
   "main": "checkBooking.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon apiServer.js"
   },
   "repository": {
     "type": "git",
@@ -17,11 +18,15 @@
     "url": "https://github.com/victor77dev/lcsd_book/issues"
   },
   "homepage": "https://github.com/victor77dev/lcsd_book#readme",
-  "dependencies":
-  {
-      "jsdom": "~11.5.1",
-      "request": "~2.83.0",
-      "request-cookies": "~1.1.0",
-      "localStorage": "~1.0.3"
+  "dependencies": {
+    "create-react-app": "^1.5.1",
+    "express": "^4.16.2",
+    "jsdom": "~11.5.1",
+    "localStorage": "~1.0.3",
+    "request": "~2.83.0",
+    "request-cookies": "~1.1.0"
+  },
+  "devDependencies": {
+    "nodemon": "^1.14.12"
   }
 }

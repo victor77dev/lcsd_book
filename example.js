@@ -11,5 +11,6 @@ checkBooking.readCaptcha1("captcha1_data/0.png").then((res) => {
     console.log(res);
   });
 
-// Example for update court info
-checkBooking.updateCourtInfo();
+//// Example for update court info
+//checkBooking.updateCourtInfo();
+checkBooking.readLastSummary();
